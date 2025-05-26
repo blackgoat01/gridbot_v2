@@ -80,7 +80,7 @@ def place_order(side, price, qty):
     }
     try:
         response = requests.post(url, headers=headers, data=json.dumps(body))
-        send_telegram_message(f"📨 {side} ➜ {qty} @ {price} USDT
+        send_telegram_message(f"📨 {side} ➜ {qty} @ {price} USDT — Order gesendet.
 Antwort: {response.text}")
     except Exception as e:
         send_telegram_message(f"❌ Order Fehler: {e}")
