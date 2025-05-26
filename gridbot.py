@@ -1,62 +1,118 @@
-import requests
 import os
 import time
 import hmac
 import hashlib
 import json
+import requests
 from datetime import datetime
 
-# KONFIGURATION (aus Render Environment lesen)
+# API-Zugangsdaten aus Render ENV
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
-SYMBOL = "DOGEUSDT"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Telegram-Nachricht senden
-def send_telegram_message(message):
+# Grid-Konfiguration
+SYMBOL = "DOGEUSDT"
+CATEGORY = "spot"
+GRID_QTY = 45
+GRID_BUY_PRICE = 0.2182
+GRID_SELL_PRICE = 0.2204
+CHECK_INTERVAL = 900  # alle 15 Minuten
+
+# Telegram senden
+def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-        requests.post(url, data=payload)
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        requests.post(url, data=data)
     except Exception as e:
-        print("❌ Telegram Fehler:", e)
+        print("Telegram-Fehler:", e)
 
-# Signatur für Bybit REST
-def create_signature(params: dict, secret: str):
-    sorted_params = sorted(params.items())
-    query = '&'.join(f"{k}={v}" for k, v in sorted_params)
-    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+# Signatur für V5
+def create_signature(body: dict, secret: str):
+    payload = json.dumps(body)
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
-# Beispiel-Funktion zur Prüfung von Wallet (später erweiterbar)
-def check_wallet():
+# Headers für Bybit
+def get_headers():
+    return {
+        "X-BAPI-API-KEY": API_KEY,
+        "Content-Type": "application/json"
+    }
+
+# Order platzieren
+def place_order(side, price, qty):
+    url = "https://api.bybit.com/v5/order/create"
+    timestamp = int(time.time() * 1000)
+    body = {
+        "category": CATEGORY,
+        "symbol": SYMBOL,
+        "side": side,
+        "order_type": "Limit",
+        "qty": str(qty),
+        "price": str(price),
+        "time_in_force": "GTC",
+        "timestamp": timestamp
+    }
+    signature = create_signature(body, API_SECRET)
+    headers = get_headers()
+    headers["X-BAPI-SIGN"] = signature
+    headers["X-BAPI-TIMESTAMP"] = str(timestamp)
+
     try:
-        timestamp = int(time.time() * 1000)
-        params = {
-            "api_key": API_KEY,
-            "timestamp": timestamp
-        }
-        sign = create_signature(params, API_SECRET)
-        params["sign"] = sign
-        response = requests.get("https://api.bybit.com/v2/private/wallet/balance", params=params)
-        data = response.json()
-        if "result" in data and "DOGE" in data["result"]:
-            balance = data["result"]["DOGE"]["available_balance"]
-            return float(balance)
-        return 0.0
+        response = requests.post(url, headers=headers, data=json.dumps(body))
+        res = response.json()
+        send_telegram(f"📨 {side} Order ➜ {qty} @ {price} USDT\nAntwort: {res.get('retMsg')}")
     except Exception as e:
-        print("Fehler beim Wallet Abruf:", e)
+        send_telegram(f"❌ Fehler bei {side}-Order: {e}")
+
+# Wallet-Abfrage
+def get_wallet_balance():
+    url = "https://api.bybit.com/v5/account/wallet-balance"
+    timestamp = int(time.time() * 1000)
+    params = {
+        "accountType": "UNIFIED",
+        "coin": "DOGE",
+        "timestamp": timestamp
+    }
+    signature = create_signature(params, API_SECRET)
+    headers = get_headers()
+    headers["X-BAPI-SIGN"] = signature
+    headers["X-BAPI-TIMESTAMP"] = str(timestamp)
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+        return float(data["result"]["list"][0]["coin"][0]["availableToWithdraw"])
+    except Exception as e:
+        print("Wallet Fehler:", e)
         return 0.0
 
-# Hauptfunktion
+# Haupt-Loop
 def run_bot():
-    send_telegram_message("✅ GridBot wurde erfolgreich gestartet.")
+    send_telegram("🚀 GridBot ist aktiv.")
     while True:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Bot läuft...")
-        balance = check_wallet()
-        send_telegram_message(f"📊 Aktuelles DOGE Guthaben: {balance} DOGE")
-        time.sleep(900)  # 15 Minuten warten
 
-# Einstiegspunkt
+        # 1. Kaufsignal setzen
+        place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
+        time.sleep(5)
+
+        # 2. Wallet prüfen
+        balance = get_wallet_balance()
+        print("DOGE im Wallet:", balance)
+
+        if balance >= GRID_QTY:
+            # 3. Verkaufs-Order setzen
+            place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
+        else:
+            send_telegram("⚠️ Noch kein DOGE gekauft – Verkauf übersprungen.")
+
+        # 4. Warten
+        send_telegram(f"⏱ Nächste Prüfung in {CHECK_INTERVAL // 60} Minuten.")
+        time.sleep(CHECK_INTERVAL)
+
+# Startpunkt
 if __name__ == "__main__":
     run_bot()
