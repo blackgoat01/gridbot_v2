@@ -27,12 +27,16 @@ def create_signature(secret, params: dict) -> str:
     return hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
 def send_telegram_message(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+    token = TELEGRAM_TOKEN
+    chat_id = TELEGRAM_CHAT_ID
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = {"chat_id": chat_id, "text": msg}
+
     try:
-        requests.post(url, data=data)
+        response = requests.post(url, data=data)
+        print("Telegram Antwort:", response.status_code, response.text)
     except Exception as e:
-        print("Telegram Fehler:", e)
+        print("Telegram Fehler:", str(e))
 
 def get_wallet_balance():
     url = f"{BASE_URL}/v5/account/wallet-balance"
